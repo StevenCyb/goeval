@@ -29,11 +29,10 @@ var (
 /*
  * <EXPRESSION>            ::= <SKIP>* <NUMBER_EXPANDED> | <SKIP>* <TEXT_EXPANDED> | <SKIP>* <LOGICAL_EXPRESSION> | <SKIP>* <COMPARISON_EXPRESSION>
  *
- * <BOOL_EXPANDED>         ::= <BOOL> <SKIP>*
+ * <BOOL_EXPANDED>         ::= <BOOL> <SKIP>* | <BOOL_EXPANDED> <LOGICAL_OPERATION> <SKIP>* <BOOL_EXPANDED> | <BOOL_EXPANDED> <LOGICAL_OPERATION> <BOOL_EXPANDED>
  * <TEXT_EXPANDED>         ::= <TEXT> <SKIP>* | <TEXT> <SKIP>* "+" <SKIP>* <TEXT_EXPANDED>
  * <NUMBER_EXPANDED>       ::= <NUMBER> <SKIP>* | <NUMBER> <SKIP>* <ARITHMETIC_OPERATION> <SKIP>* <NUMBER> <SKIP>* | <NUMBER> <SKIP>* <ARITHMETIC_OPERATION> <NUMBER_EXPANDED>
  *
- * <LOGICAL_EXPRESSION>    ::= <BOOL_EXPANDED> <LOGICAL_OPERATION> <SKIP>* <BOOL_EXPANDED> | <BOOL_EXPANDED> <LOGICAL_OPERATION> <LOGICAL_EXPRESSION>
  * <COMPARISON_EXPRESSION> ::= <EXPRESSION> <COMPARISON_OPERATION> <EXPRESSION> | <EXPRESSION> <COMPARISON_OPERATION> <COMPARISON_EXPRESSION>
 
 # TODO CONTEXT_EXPRESSION
@@ -153,7 +152,30 @@ func (p *parser) numberExpanded() (interface{}, error) {
 			return nil, errs.NewErrErrorAtPosition(err, p.tokenizer.GetCursorPosition())
 		}
 
-		// BUG should handle different here when lookahead2 is * / and % 
+		if operation.Value == "*" || operation.Value == "/" || operation.Value == "%" {
+			secondValue, err := p.number()
+			if err != nil {
+				return nil, errs.NewErrErrorAtPosition(err, p.tokenizer.GetCursorPosition())
+			}
+
+			switch operation.Value {
+			case "*":
+				firstValue = firstValue.(float64) * secondValue.(float64)
+			case "/":
+				firstValue = firstValue.(float64) / secondValue.(float64)
+			case "%":
+				firstValue = int64(firstValue.(float64)) % int64(secondValue.(float64))
+			}
+
+			if p.lookahead1 == nil || p.lookahead1.Type != arithmeticOperationType {
+				return firstValue, nil
+			}
+
+			operation, err = p.eat(arithmeticOperationType)
+			if err != nil {
+				return nil, errs.NewErrErrorAtPosition(err, p.tokenizer.GetCursorPosition())
+			}
+		}
 
 		secondValue, err := p.numberExpanded()
 		if err != nil {
@@ -195,6 +217,34 @@ func (p *parser) number() (interface{}, error) {
 }
 
 func (p *parser) boolExpanded() (interface{}, error) {
+	firstValue, err := p.boolean()
+	if err != nil {
+		return nil, err
+	}
+
+	if p.lookahead1 != nil && p.lookahead1.Type == logicalOperationType {
+		operation, err := p.eat(logicalOperationType)
+		if err != nil {
+			return nil, errs.NewErrErrorAtPosition(err, p.tokenizer.GetCursorPosition())
+		}
+
+		secondValue, err := p.boolExpanded()
+		if err != nil {
+			return nil, errs.NewErrErrorAtPosition(err, p.tokenizer.GetCursorPosition())
+		}
+
+		switch operation.Value {
+		case "&&":
+			return firstValue.(bool) && secondValue.(bool), nil
+		case "||":
+			return firstValue.(bool) || secondValue.(bool), nil
+		}
+	}
+
+	return firstValue, nil
+}
+
+func (p *parser) boolean() (interface{}, error) {
 	token, err := p.eat(boolType)
 	if err != nil {
 		return nil, errs.NewErrErrorAtPosition(err, p.tokenizer.GetCursorPosition())
