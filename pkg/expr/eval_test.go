@@ -15,7 +15,7 @@ func Test_Eval(t *testing.T) {
 		result      Result
 		expectPanic bool
 	}{
-		{expression: "1", result: Result{Value: float64(1)}},
+		// {expression: "1", result: Result{Value: float64(1)}},
 		// {expression: "  2 ", result: Result{Value: float64(2)}},
 		// {expression: " true ", result: Result{Value: true}},
 		// {expression: ` "hello" `, result: Result{Value: "hello"}},

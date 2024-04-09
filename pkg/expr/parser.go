@@ -25,7 +25,7 @@ var (
 	float64Size = 64
 )
 
-// LL(1) parser for the following grammar:
+// LL(2) parser for the following grammar:
 /*
  * <EXPRESSION>            ::= <SKIP>* <NUMBER_EXPANDED> | <SKIP>* <TEXT_EXPANDED> | <SKIP>* <LOGICAL_EXPRESSION> | <SKIP>* <COMPARISON_EXPRESSION>
  *
@@ -49,8 +49,9 @@ var (
 <TEXT>                  ::= ^("[^"]*"|'[^"]*')
 */
 type parser struct {
-	tokenizer *tokenizer.Tokenizer
-	lookahead *tokenizer.Token
+	tokenizer  *tokenizer.Tokenizer
+	lookahead1 *tokenizer.Token
+	lookahead2 *tokenizer.Token
 }
 
 // Create a new LL(1) parser for the given expression.
@@ -75,7 +76,8 @@ func newParser(expression string) *parser {
 
 // eat return a token with expected type.
 func (p *parser) eat(tokenType tokenizer.Type) (*tokenizer.Token, error) {
-	token := p.lookahead
+	token := p.lookahead1
+	p.lookahead1 = p.lookahead2
 
 	if token == nil {
 		return nil, errs.NewErrUnexpectedInputEnd(tokenType.String())
@@ -89,15 +91,21 @@ func (p *parser) eat(tokenType tokenizer.Type) (*tokenizer.Token, error) {
 	}
 
 	var err error
-	p.lookahead, err = p.tokenizer.GetNextToken()
+	p.lookahead2, err = p.tokenizer.GetNextToken()
 
-	return token, err //nolint:wrapcheck
+	return token, err
 }
 
 func (p *parser) Parse() Result {
 	var err error
 
-	p.lookahead, err = p.tokenizer.GetNextToken()
+	p.lookahead1, err = p.tokenizer.GetNextToken()
+	if err != nil {
+		return Result{
+			Error: err,
+		}
+	}
+	p.lookahead2, err = p.tokenizer.GetNextToken()
 	if err != nil {
 		return Result{
 			Error: err,
@@ -113,13 +121,13 @@ func (p *parser) Parse() Result {
 }
 
 func (p *parser) expression() (interface{}, error) {
-	if p.lookahead == nil {
+	if p.lookahead1 == nil {
 		return nil, errs.NewErrErrorAtPosition(
 			errs.NewErrUnexpectedInputEnd("expression"),
 			p.tokenizer.GetCursorPosition())
 	}
 
-	switch p.lookahead.Type {
+	switch p.lookahead1.Type {
 	case numberType:
 		return p.numberExpanded()
 	case textType:
@@ -129,8 +137,8 @@ func (p *parser) expression() (interface{}, error) {
 	}
 
 	return nil, errs.NewErrErrorAtPosition(
-		errs.NewErrUnexpectedTokenType(p.lookahead.Type.String(), "expression"),
-		p.tokenizer.GetCursorPosition()-len(p.lookahead.Value))
+		errs.NewErrUnexpectedTokenType(p.lookahead1.Type.String(), "expression"),
+		p.tokenizer.GetCursorPosition()-len(p.lookahead1.Value))
 }
 
 func (p *parser) numberExpanded() (interface{}, error) {
@@ -139,13 +147,14 @@ func (p *parser) numberExpanded() (interface{}, error) {
 		return nil, err
 	}
 
-	if p.lookahead != nil && p.lookahead.Type == arithmeticOperationType {
+	if p.lookahead1 != nil && p.lookahead1.Type == arithmeticOperationType {
 		operation, err := p.eat(arithmeticOperationType)
 		if err != nil {
 			return nil, errs.NewErrErrorAtPosition(err, p.tokenizer.GetCursorPosition())
 		}
 
-		// BUG should handle different here for * / and %
+		// BUG should handle different here when lookahead2 is * / and % 
+
 		secondValue, err := p.numberExpanded()
 		if err != nil {
 			return nil, errs.NewErrErrorAtPosition(err, p.tokenizer.GetCursorPosition())
@@ -203,7 +212,7 @@ func (p *parser) textExpanded() (interface{}, error) {
 	token.Value = strings.ReplaceAll(token.Value, "\"", "")
 	token.Value = strings.ReplaceAll(token.Value, "'", "")
 
-	if p.lookahead != nil && p.lookahead.Type == arithmeticOperationType && p.lookahead.Value == "+" {
+	if p.lookahead1 != nil && p.lookahead1.Type == arithmeticOperationType && p.lookahead1.Value == "+" {
 		_, err = p.eat(arithmeticOperationType)
 		if err != nil {
 			return nil, errs.NewErrErrorAtPosition(err, p.tokenizer.GetCursorPosition())
