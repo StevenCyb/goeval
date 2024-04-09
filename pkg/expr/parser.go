@@ -83,7 +83,7 @@ func (p *parser) eat(tokenType tokenizer.Type) (*tokenizer.Token, error) {
 	}
 
 	if token.Type != tokenType {
-		return nil, errs.NewErrErrorAtPosition(
+		return nil, errs.NewErrorAtPosition(
 			errs.NewErrUnexpectedTokenType(token.Type.String(), tokenType.String()),
 			p.tokenizer.GetCursorPosition(),
 		)
@@ -121,7 +121,7 @@ func (p *parser) Parse() Result {
 
 func (p *parser) expression() (interface{}, error) {
 	if p.lookahead1 == nil {
-		return nil, errs.NewErrErrorAtPosition(
+		return nil, errs.NewErrorAtPosition(
 			errs.NewErrUnexpectedInputEnd("expression"),
 			p.tokenizer.GetCursorPosition())
 	}
@@ -135,9 +135,14 @@ func (p *parser) expression() (interface{}, error) {
 		return p.boolExpanded()
 	}
 
-	return nil, errs.NewErrErrorAtPosition(
+	return nil, errs.NewErrorAtPosition(
 		errs.NewErrUnexpectedTokenType(p.lookahead1.Type.String(), "expression"),
 		p.tokenizer.GetCursorPosition()-len(p.lookahead1.Value))
+}
+
+func (*parser) comparisonExpression() (interface{}, error) {
+
+	return nil, nil
 }
 
 func (p *parser) numberExpanded() (interface{}, error) {
@@ -149,13 +154,13 @@ func (p *parser) numberExpanded() (interface{}, error) {
 	if p.lookahead1 != nil && p.lookahead1.Type == arithmeticOperationType {
 		operation, err := p.eat(arithmeticOperationType)
 		if err != nil {
-			return nil, errs.NewErrErrorAtPosition(err, p.tokenizer.GetCursorPosition())
+			return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
 		}
 
 		if operation.Value == "*" || operation.Value == "/" || operation.Value == "%" {
 			secondValue, err := p.number()
 			if err != nil {
-				return nil, errs.NewErrErrorAtPosition(err, p.tokenizer.GetCursorPosition())
+				return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
 			}
 
 			switch operation.Value {
@@ -173,13 +178,13 @@ func (p *parser) numberExpanded() (interface{}, error) {
 
 			operation, err = p.eat(arithmeticOperationType)
 			if err != nil {
-				return nil, errs.NewErrErrorAtPosition(err, p.tokenizer.GetCursorPosition())
+				return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
 			}
 		}
 
 		secondValue, err := p.numberExpanded()
 		if err != nil {
-			return nil, errs.NewErrErrorAtPosition(err, p.tokenizer.GetCursorPosition())
+			return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
 		}
 
 		switch operation.Value {
@@ -202,13 +207,13 @@ func (p *parser) numberExpanded() (interface{}, error) {
 func (p *parser) number() (interface{}, error) {
 	token, err := p.eat(numberType)
 	if err != nil {
-		return nil, errs.NewErrErrorAtPosition(err, p.tokenizer.GetCursorPosition())
+		return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
 	}
 
 	var value float64
 	value, err = strconv.ParseFloat(token.Value, float64Size)
 	if err != nil {
-		return nil, errs.NewErrErrorAtPosition(
+		return nil, errs.NewErrorAtPosition(
 			fmt.Errorf("failed to parse float value: %w", err),
 			p.tokenizer.GetCursorPosition()-len(token.Value))
 	}
@@ -225,12 +230,12 @@ func (p *parser) boolExpanded() (interface{}, error) {
 	if p.lookahead1 != nil && p.lookahead1.Type == logicalOperationType {
 		operation, err := p.eat(logicalOperationType)
 		if err != nil {
-			return nil, errs.NewErrErrorAtPosition(err, p.tokenizer.GetCursorPosition())
+			return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
 		}
 
 		secondValue, err := p.boolExpanded()
 		if err != nil {
-			return nil, errs.NewErrErrorAtPosition(err, p.tokenizer.GetCursorPosition())
+			return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
 		}
 
 		switch operation.Value {
@@ -247,7 +252,7 @@ func (p *parser) boolExpanded() (interface{}, error) {
 func (p *parser) boolean() (interface{}, error) {
 	token, err := p.eat(boolType)
 	if err != nil {
-		return nil, errs.NewErrErrorAtPosition(err, p.tokenizer.GetCursorPosition())
+		return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
 	}
 
 	return strings.ToLower(token.Value) == "true", nil
@@ -256,7 +261,7 @@ func (p *parser) boolean() (interface{}, error) {
 func (p *parser) textExpanded() (interface{}, error) {
 	token, err := p.eat(textType)
 	if err != nil {
-		return nil, errs.NewErrErrorAtPosition(err, p.tokenizer.GetCursorPosition())
+		return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
 	}
 
 	token.Value = strings.ReplaceAll(token.Value, "\"", "")
@@ -265,12 +270,12 @@ func (p *parser) textExpanded() (interface{}, error) {
 	if p.lookahead1 != nil && p.lookahead1.Type == arithmeticOperationType && p.lookahead1.Value == "+" {
 		_, err = p.eat(arithmeticOperationType)
 		if err != nil {
-			return nil, errs.NewErrErrorAtPosition(err, p.tokenizer.GetCursorPosition())
+			return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
 		}
 
 		secondValue, err := p.textExpanded()
 		if err != nil {
-			return nil, errs.NewErrErrorAtPosition(err, p.tokenizer.GetCursorPosition())
+			return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
 		}
 
 		return fmt.Sprintf("%s%s", token.Value, secondValue), nil

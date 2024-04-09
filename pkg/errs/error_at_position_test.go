@@ -14,6 +14,6 @@ func TestErrorAtPositionError(t *testing.T) {
 	key := "b"
 	require.Equal(t,
 		fmt.Sprintf(errErrorAtPosition, key, pos),
-		NewErrErrorAtPosition(fmt.Errorf(key), pos).Error(),
+		NewErrorAtPosition(fmt.Errorf(key), pos).Error(),
 	)
 }
