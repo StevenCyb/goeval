@@ -31,4 +31,4 @@ jobs:
     - name: Clear cache
       run: go clean -testcache
     - name: Run test
-      run: go test ./... -v --failfast -cover
+      run: go test ./... -v --failfast -covere

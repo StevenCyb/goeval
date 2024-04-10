@@ -5,6 +5,7 @@
     "bodyclose",
     "containedctx",
     "contextcheck",
+    "covere",
     "cyclop",
     "deadcode",
     "decorder",
