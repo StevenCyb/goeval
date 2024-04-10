@@ -25,35 +25,47 @@ var (
 	float64Size = 64
 )
 
+func Eval(format string, a ...any) Result {
+	expression := strings.TrimSpace(fmt.Sprintf(format, a...))
+	if expression == "" {
+		return Result{
+			Error: errs.ErrEmptyExpression,
+		}
+	}
+
+	return newParser(expression).Parse()
+}
+
 // LL(2) parser for the following grammar:
 /*
- * <EXPRESSION>            ::= <SKIP>* <NUMBER_EXPANDED> | <SKIP>* <TEXT_EXPANDED> | <SKIP>* <LOGICAL_EXPRESSION> | <SKIP>* <COMPARISON_EXPRESSION>
- *
- * <BOOL_EXPANDED>         ::= <BOOL> <SKIP>* | <BOOL_EXPANDED> <LOGICAL_OPERATION> <SKIP>* <BOOL_EXPANDED> | <BOOL_EXPANDED> <LOGICAL_OPERATION> <BOOL_EXPANDED>
- * <TEXT_EXPANDED>         ::= <TEXT> <SKIP>* | <TEXT> <SKIP>* "+" <SKIP>* <TEXT_EXPANDED>
- * <NUMBER_EXPANDED>       ::= <NUMBER> <SKIP>* | <NUMBER> <SKIP>* <ARITHMETIC_OPERATION> <SKIP>* <NUMBER> <SKIP>* | <NUMBER> <SKIP>* <ARITHMETIC_OPERATION> <NUMBER_EXPANDED>
- *
- * <COMPARISON_EXPRESSION> ::= <EXPRESSION> <COMPARISON_OPERATION> <EXPRESSION> | <EXPRESSION> <COMPARISON_OPERATION> <COMPARISON_EXPRESSION>
- *
- * # TODO CONTEXT_EXPRESSION
- *
- * <SKIP>                  ::= ^\s+
- * <CONTEXT_START>         ::= ^\(
- * <CONTEXT_END>           ::= ^\)
- * <LOGICAL_OPERATION>     ::= ^(&&|\|\|)
- * <COMPARISON_OPERATION>  ::= ^(==|!=|<=?|>=?)
- * <ARITHMETIC_OPERATION>  ::= ^(\+|-|\*|\/|%)
- * <NUMBER>                ::= ^\d+(\.\d+)?
- * <BOOL>                  ::= ^(true|false)
- * <TEXT>                  ::= ^("[^"]*"|'[^"]*')
- */
+<EXPRESSION>            ::= <NUMBER>
+													| <TEXT>
+													| <BOOL>
+													| <ARITHMETIC_EXPRESSION>
+													| <LOGICAL_EXPRESSION>
+													| <COMPARISON_EXPRESSION>
+
+<ARITHMETIC_EXPRESSION> ::= <EXPRESSION> <ARITHMETIC_OPERATION> <EXPRESSION>
+<LOGICAL_EXPRESSION> 		::= <EXPRESSION> <LOGICAL_OPERATION> <EXPRESSION>
+<COMPARISON_EXPRESSION>	::= <EXPRESSION> <COMPARISON_OPERATION> <EXPRESSION>
+
+<SKIP>                  ::= ^\s+
+<CONTEXT_START>         ::= ^\(
+<CONTEXT_END>           ::= ^\)
+<LOGICAL_OPERATION>     ::= ^(&&|\|\|)
+<COMPARISON_OPERATION>  ::= ^(==|!=|<=?|>=?)
+<ARITHMETIC_OPERATION>  ::= ^(\+|-|\*|\/|%)
+<NUMBER>                ::= ^\d+(\.\d+)?
+<BOOL>                  ::= ^(true|false)
+<TEXT>                  ::= ^("[^"]*"|'[^"]*')
+*/
 type parser struct {
 	tokenizer  *tokenizer.Tokenizer
 	lookahead1 *tokenizer.Token
 	lookahead2 *tokenizer.Token
 }
 
-// Create a new LL(1) parser for the given expression.
+// Create a new LL(2) parser for the given expression.
 func newParser(expression string) *parser {
 	return &parser{
 		tokenizer: tokenizer.New(
@@ -68,7 +80,7 @@ func newParser(expression string) *parser {
 				tokenizer.NewSpec(`^(&&|\|\|)`, logicalOperationType),
 				tokenizer.NewSpec(`^\d+(\.\d+)?`, numberType),
 				tokenizer.NewSpec(`^(true|false)`, boolType),
-				tokenizer.NewSpec(`^("[^"]*"|'[^']*')`, textType),
+				tokenizer.NewSpec(`^("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')`, textType),
 			}),
 	}
 }
@@ -111,7 +123,7 @@ func (p *parser) Parse() Result {
 		}
 	}
 
-	value, err := p.expression()
+	value, err := p.expression(nil)
 
 	return Result{
 		Value: value,
@@ -119,7 +131,7 @@ func (p *parser) Parse() Result {
 	}
 }
 
-func (p *parser) expression() (interface{}, error) {
+func (p *parser) expression(leftValue interface{}) (interface{}, error) {
 	if p.lookahead1 == nil {
 		return nil, errs.NewErrorAtPosition(
 			errs.NewErrUnexpectedInputEnd("expression"),
@@ -127,123 +139,153 @@ func (p *parser) expression() (interface{}, error) {
 	}
 
 	var err error
-	var firstValue interface{}
-	switch p.lookahead1.Type {
-	case numberType:
-		firstValue, err = p.numberExpanded()
-	case textType:
-		firstValue, err = p.textExpanded()
-	case boolType:
-		firstValue, err = p.boolExpanded()
+	if leftValue == nil {
+		leftValue, err = p.literal()
+		if p.lookahead1 == nil || err != nil {
+			return leftValue, err
+		}
 	}
 
+	if p.lookahead1.Type == arithmeticOperationType {
+		return p.arithmeticOperation(leftValue)
+	} else if p.lookahead1.Type == logicalOperationType {
+		return p.logicalOperation(leftValue)
+	} else if p.lookahead1.Type == comparisonOperationType {
+		return p.comparisonOperation(leftValue)
+	}
+
+	return nil, errs.NewErrorAtPosition(
+		errs.NewErrUnexpectedTokenType(p.lookahead1.Type.String(), "any"),
+		p.tokenizer.GetCursorPosition())
+}
+
+func (p *parser) arithmeticOperation(leftValue interface{}) (interface{}, error) {
+	token, err := p.eat(arithmeticOperationType)
 	if err != nil {
 		return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
 	}
 
-	if p.lookahead1 != nil && p.lookahead1.Type == comparisonOperationType {
-		operation, err := p.eat(comparisonOperationType)
+	if token.Value == "*" || token.Value == "/" || token.Value == "%" {
+		rightValue, err := p.literal()
 		if err != nil {
-			return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
+			return nil, err
 		}
 
-		secondValue, err := p.expression()
-		if err != nil {
-			return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
+		switch token.Value {
+		case "*":
+			rightValue = convertFloat(leftValue) * convertFloat(rightValue)
+		case "/":
+			rightValue = convertFloat(leftValue) / convertFloat(rightValue)
+		case "%":
+			rightValue = int(convertFloat(leftValue)) % int(convertFloat(rightValue))
 		}
 
-		convert := func(value interface{}) float64 {
-			if v, ok := value.(float64); ok {
-				return v
-			} else if v, ok := value.(string); ok {
-				return float64(len(v))
-			} else if v, ok := value.(bool); ok && v {
-				return 1
-			}
-
-			return 0
+		if p.lookahead1 == nil {
+			return rightValue, nil
 		}
 
-		switch operation.Value {
-		case "==":
-			return firstValue == secondValue, nil
-		case "!=":
-			return firstValue != secondValue, nil
-		case "<":
-			return convert(firstValue) < convert(secondValue), nil
-		case "<=":
-			return convert(firstValue) <= convert(secondValue), nil
-		case ">":
-			return convert(firstValue) > convert(secondValue), nil
-		case ">=":
-			return convert(firstValue) >= convert(secondValue), nil
-		}
-	} else if firstValue != nil && p.lookahead1 == nil {
-		return firstValue, nil
+		return p.expression(rightValue)
 	}
 
-	return nil, errs.NewErrorAtPosition(
-		errs.NewErrUnexpectedTokenType(p.lookahead1.Type.String(), "expression"),
-		p.tokenizer.GetCursorPosition()-len(p.lookahead1.Value))
+	var rightValue interface{}
+	if p.lookahead2 == nil || p.lookahead2.Type != arithmeticOperationType {
+		rightValue, err = p.literal()
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		rightValue, err = p.expression(nil)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if token.Value == "+" {
+		leftValue = convertFloat(leftValue) + convertFloat(rightValue)
+	} else if token.Value == "-" {
+		leftValue = convertFloat(leftValue) - convertFloat(rightValue)
+	}
+
+	if p.lookahead1 != nil {
+		return p.expression(leftValue)
+	} else {
+		return leftValue, nil
+	}
 }
 
-func (p *parser) numberExpanded() (interface{}, error) {
-	firstValue, err := p.number()
+func (p *parser) logicalOperation(leftValue interface{}) (interface{}, error) {
+	token, err := p.eat(logicalOperationType)
+	if err != nil {
+		return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
+	}
+
+	rightValue, err := p.expression(nil)
 	if err != nil {
 		return nil, err
 	}
 
-	if p.lookahead1 != nil && p.lookahead1.Type == arithmeticOperationType {
-		operation, err := p.eat(arithmeticOperationType)
-		if err != nil {
-			return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
-		}
-
-		if operation.Value == "*" || operation.Value == "/" || operation.Value == "%" {
-			secondValue, err := p.number()
-			if err != nil {
-				return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
-			}
-
-			switch operation.Value {
-			case "*":
-				firstValue = firstValue.(float64) * secondValue.(float64)
-			case "/":
-				firstValue = firstValue.(float64) / secondValue.(float64)
-			case "%":
-				firstValue = int64(firstValue.(float64)) % int64(secondValue.(float64))
-			}
-
-			if p.lookahead1 == nil || p.lookahead1.Type != arithmeticOperationType {
-				return firstValue, nil
-			}
-
-			operation, err = p.eat(arithmeticOperationType)
-			if err != nil {
-				return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
-			}
-		}
-
-		secondValue, err := p.numberExpanded()
-		if err != nil {
-			return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
-		}
-
-		switch operation.Value {
-		case "+":
-			return firstValue.(float64) + secondValue.(float64), nil
-		case "-":
-			return firstValue.(float64) - secondValue.(float64), nil
-		case "*":
-			return firstValue.(float64) * secondValue.(float64), nil
-		case "/":
-			return firstValue.(float64) / secondValue.(float64), nil
-		case "%":
-			return int64(firstValue.(float64)) % int64(secondValue.(float64)), nil
-		}
+	switch token.Value {
+	case "&&":
+		return convertBool(leftValue) && convertBool(rightValue), nil
+	case "||":
+		return convertBool(leftValue) || convertBool(rightValue), nil
 	}
 
-	return firstValue, nil
+	return nil, errs.NewErrorAtPosition(
+		errs.NewErrUnexpectedTokenType(token.Type.String(), "logical operation"),
+		p.tokenizer.GetCursorPosition())
+}
+
+func (p *parser) comparisonOperation(leftValue interface{}) (interface{}, error) {
+	token, err := p.eat(comparisonOperationType)
+	if err != nil {
+		return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
+	}
+
+	rightValue, err := p.expression(nil)
+	if err != nil {
+		return nil, err
+	}
+
+	switch token.Value {
+	case "==":
+		return leftValue == rightValue, nil
+	case "!=":
+		return leftValue != rightValue, nil
+	case "<":
+		return convertFloat(leftValue) < convertFloat(rightValue), nil
+	case "<=":
+		return convertFloat(leftValue) <= convertFloat(rightValue), nil
+	case ">":
+		return convertFloat(leftValue) > convertFloat(rightValue), nil
+	case ">=":
+		return convertFloat(leftValue) >= convertFloat(rightValue), nil
+	}
+
+	return nil, errs.NewErrorAtPosition(
+		errs.NewErrUnexpectedTokenType(token.Type.String(), "comparison operation"),
+		p.tokenizer.GetCursorPosition())
+}
+
+func (p *parser) literal() (interface{}, error) {
+	if p.lookahead1 == nil {
+		return nil, errs.NewErrorAtPosition(
+			errs.NewErrUnexpectedInputEnd("literal"),
+			p.tokenizer.GetCursorPosition())
+	}
+
+	switch p.lookahead1.Type {
+	case numberType:
+		return p.number()
+	case textType:
+		return p.text()
+	case boolType:
+		return p.boolean()
+	}
+
+	return nil, errs.NewErrorAtPosition(
+		errs.NewErrUnexpectedTokenType(p.lookahead1.Type.String(), "literal"),
+		p.tokenizer.GetCursorPosition())
 }
 
 func (p *parser) number() (interface{}, error) {
@@ -263,34 +305,6 @@ func (p *parser) number() (interface{}, error) {
 	return value, nil
 }
 
-func (p *parser) boolExpanded() (interface{}, error) {
-	firstValue, err := p.boolean()
-	if err != nil {
-		return nil, err
-	}
-
-	if p.lookahead1 != nil && p.lookahead1.Type == logicalOperationType {
-		operation, err := p.eat(logicalOperationType)
-		if err != nil {
-			return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
-		}
-
-		secondValue, err := p.boolExpanded()
-		if err != nil {
-			return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
-		}
-
-		switch operation.Value {
-		case "&&":
-			return firstValue.(bool) && secondValue.(bool), nil
-		case "||":
-			return firstValue.(bool) || secondValue.(bool), nil
-		}
-	}
-
-	return firstValue, nil
-}
-
 func (p *parser) boolean() (interface{}, error) {
 	token, err := p.eat(boolType)
 	if err != nil {
@@ -300,28 +314,11 @@ func (p *parser) boolean() (interface{}, error) {
 	return strings.ToLower(token.Value) == "true", nil
 }
 
-func (p *parser) textExpanded() (interface{}, error) {
+func (p *parser) text() (interface{}, error) {
 	token, err := p.eat(textType)
 	if err != nil {
 		return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
 	}
 
-	token.Value = strings.ReplaceAll(token.Value, "\"", "")
-	token.Value = strings.ReplaceAll(token.Value, "'", "")
-
-	if p.lookahead1 != nil && p.lookahead1.Type == arithmeticOperationType && p.lookahead1.Value == "+" {
-		_, err = p.eat(arithmeticOperationType)
-		if err != nil {
-			return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
-		}
-
-		secondValue, err := p.textExpanded()
-		if err != nil {
-			return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
-		}
-
-		return fmt.Sprintf("%s%s", token.Value, secondValue), nil
-	}
-
-	return token.Value, nil
+	return token.Value[1 : len(token.Value)-1], nil
 }
