@@ -2,6 +2,7 @@ package expr
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -41,6 +42,7 @@ func Eval(format string, a ...any) Result {
 <EXPRESSION>            ::= <NUMBER>
 													| <TEXT>
 													| <BOOL>
+													| <CONTEXT_EXPRESSION>
 													| <ARITHMETIC_EXPRESSION>
 													| <LOGICAL_EXPRESSION>
 													| <COMPARISON_EXPRESSION>
@@ -48,6 +50,7 @@ func Eval(format string, a ...any) Result {
 <ARITHMETIC_EXPRESSION> ::= <EXPRESSION> <ARITHMETIC_OPERATION> <EXPRESSION>
 <LOGICAL_EXPRESSION> 		::= <EXPRESSION> <LOGICAL_OPERATION> <EXPRESSION>
 <COMPARISON_EXPRESSION>	::= <EXPRESSION> <COMPARISON_OPERATION> <EXPRESSION>
+<CONTEXT_EXPRESSION>		::= <CONTEXT_START> <EXPRESSION> <CONTEXT_END>
 
 <SKIP>                  ::= ^\s+
 <CONTEXT_START>         ::= ^\(
@@ -138,6 +141,10 @@ func (p *parser) expression(leftValue interface{}) (interface{}, error) {
 			p.tokenizer.GetCursorPosition())
 	}
 
+	if p.lookahead1.Type == contextStartType {
+		return p.contextExpression()
+	}
+
 	var err error
 	if leftValue == nil {
 		leftValue, err = p.literal()
@@ -152,11 +159,36 @@ func (p *parser) expression(leftValue interface{}) (interface{}, error) {
 		return p.logicalOperation(leftValue)
 	} else if p.lookahead1.Type == comparisonOperationType {
 		return p.comparisonOperation(leftValue)
+	} else if p.lookahead1.Type == contextEndType {
+		return leftValue, nil
 	}
 
 	return nil, errs.NewErrorAtPosition(
 		errs.NewErrUnexpectedTokenType(p.lookahead1.Type.String(), "any"),
 		p.tokenizer.GetCursorPosition())
+}
+
+func (p *parser) contextExpression() (interface{}, error) {
+	_, err := p.eat(contextStartType)
+	if err != nil {
+		return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
+	}
+
+	value, err := p.expression(nil)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = p.eat(contextEndType)
+	if err != nil {
+		return nil, errs.NewErrorAtPosition(err, p.tokenizer.GetCursorPosition())
+	}
+
+	if p.lookahead1 != nil {
+		return p.expression(value)
+	}
+
+	return value, nil
 }
 
 func (p *parser) arithmeticOperation(leftValue interface{}) (interface{}, error) {
@@ -171,13 +203,24 @@ func (p *parser) arithmeticOperation(leftValue interface{}) (interface{}, error)
 			return nil, err
 		}
 
+		rightValueConverted := convertFloat(rightValue)
 		switch token.Value {
 		case "*":
-			rightValue = convertFloat(leftValue) * convertFloat(rightValue)
+			rightValue = convertFloat(leftValue) * rightValueConverted
 		case "/":
-			rightValue = convertFloat(leftValue) / convertFloat(rightValue)
+			if rightValueConverted == 0 {
+				return nil, errs.NewErrorAtPosition(
+					errs.ErrDivisionByZero,
+					p.tokenizer.GetCursorPosition())
+			}
+			rightValue = convertFloat(leftValue) / rightValueConverted
 		case "%":
-			rightValue = int(convertFloat(leftValue)) % int(convertFloat(rightValue))
+			if rightValueConverted == 0 {
+				return nil, errs.NewErrorAtPosition(
+					errs.ErrDivisionByZero,
+					p.tokenizer.GetCursorPosition())
+			}
+			rightValue = int64(math.Round(convertFloat(leftValue))) % int64(math.Round(rightValueConverted))
 		}
 
 		if p.lookahead1 == nil {

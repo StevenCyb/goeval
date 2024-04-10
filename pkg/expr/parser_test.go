@@ -2,11 +2,26 @@ package expr
 
 import (
 	"fmt"
+	"math/rand"
 	"testing"
 
 	"github.com/StevenCyb/goeval/pkg/errs"
 	"github.com/stretchr/testify/assert"
 )
+
+func generateRandomString(t *testing.T) string {
+	t.Helper()
+
+	characters := `abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_+-*/%&|!<>=()[]{}.,;#\"'`
+	length := rand.Intn(15) + 0
+
+	result := make([]byte, length)
+	for i := 0; i < length; i++ {
+		result[i] = characters[rand.Intn(len(characters))]
+	}
+
+	return string(result)
+}
 
 func Test_Eval(t *testing.T) {
 	t.Parallel()
@@ -41,15 +56,11 @@ func Test_Eval(t *testing.T) {
 		{name: "Comparison_Bool", expression: " true == true ", result: Result{Value: true}},
 		{name: "Added_String_Comparison", expression: ` "a"+"b"==2`, result: Result{Value: true}},
 		{name: "Chained_Equal_Bool", expression: " 'a'=='a'!='b' ", result: Result{Value: false}},
-		{name: "Simple_Context", expression: " (1+2) ", result: Result{Value: 3}},
-		// {name: "Chained_Simple_Context", expression: " (1+2)*2 ", result: Result{Value: 6}},
+		{name: "Simple_Context", expression: " (1+2) ", result: Result{Value: float64(3)}},
+		{name: "Chained_Simple_Context", expression: " (1+2)*2 ", result: Result{Value: float64(6)}},
+		{name: "Chained_Simple_Context", expression: " ('a'+'b')-'c' ", result: Result{Value: float64(1)}},
+		{name: "Chained_Simple_Context", expression: `("a"!="b")`, result: Result{Value: true}},
 	}
-	/*
-		TODO context
-		   (1+2)*3
-		   ("a"+"b")+"c"
-		   ("a"!="b")==true
-	*/
 
 	for _, tc := range tcs {
 		tcRef := tc
@@ -70,5 +81,80 @@ func Test_Eval(t *testing.T) {
 			result := Eval(tcRef.expression, tcRef.expressionA...)
 			assert.Equal(t, tcRef.result, result, fmt.Sprintf(tc.expression, tc.expressionA...))
 		})
+	}
+}
+
+func Test_Eval_Panic_Penetration(t *testing.T) {
+	t.Parallel()
+
+	for i := 0; i < 1000; i++ {
+		input := generateRandomString(t)
+
+		defer func() {
+			if err := recover(); err != nil {
+				t.Errorf("unexpected panic on '%s': %v", input, err)
+			}
+		}()
+
+		Eval(input)
+	}
+}
+
+func Test_Eval_Semi_Read_Penetration(t *testing.T) {
+	t.Parallel()
+
+	literalGenerator := []func() string{
+		func() string {
+			return fmt.Sprintf("%d", rand.Intn(100))
+		},
+		func() string {
+			return fmt.Sprintf("%f", rand.Float64())
+		},
+		func() string {
+			return fmt.Sprintf(`"%s"`, generateRandomString(t))
+		},
+		func() string {
+			return fmt.Sprintf(`'%s'`, generateRandomString(t))
+		},
+		func() string {
+			return fmt.Sprintf("%t", rand.Intn(2) == 1)
+		},
+	}
+	operationGenerator := func() string {
+		operations := []string{"+", "-", "*", "/", "%", "&&", "||", "==", "!=", "<", "<=", ">", ">="}
+		return operations[rand.Intn(len(operations))]
+	}
+	expressionGenerator := func() string {
+		base := literalGenerator[rand.Intn(len(literalGenerator))]() +
+			operationGenerator() +
+			literalGenerator[rand.Intn(len(literalGenerator))]()
+
+		if rand.Intn(2) == 1 {
+			base = "(" + base + ")"
+		}
+
+		for i := 0; i < rand.Intn(5); i++ {
+			base = base +
+				operationGenerator() +
+				literalGenerator[rand.Intn(len(literalGenerator))]()
+
+			if rand.Intn(2) == 1 {
+				base = "(" + base + ")"
+			}
+		}
+
+		return base
+	}
+
+	for i := 0; i < 1000; i++ {
+		input := expressionGenerator()
+
+		defer func() {
+			if err := recover(); err != nil {
+				t.Errorf("unexpected panic on '%s': %v", input, err)
+			}
+		}()
+
+		Eval(input + ";")
 	}
 }
